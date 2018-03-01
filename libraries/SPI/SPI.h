@@ -99,6 +99,9 @@ class SPIClass {
   uint16_t transfer16(uint16_t data);
   void transfer(void *buf, size_t count);
 
+  // read count bytes from tx, write to rx (any one of them can be null)
+  void transceive(const uint8_t *tx, uint8_t *rx, size_t count);
+
   // Transaction Functions
   void usingInterrupt(int interruptNumber);
   void notUsingInterrupt(int interruptNumber);
@@ -120,7 +123,7 @@ class SPIClass {
   void init();
   void config(SPISettings settings);
 
-  SERCOM *_p_sercom;
+  SercomSPI *_p_sercom;
   uint8_t _uc_pinMiso;
   uint8_t _uc_pinMosi;
   uint8_t _uc_pinSCK;

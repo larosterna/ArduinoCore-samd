@@ -706,3 +706,182 @@ void SERCOM::initClockNVIC( void )
     /* Wait for synchronization */
   }
 }
+
+
+// ----------------------------------------------------------------------------
+//
+// SERCOM I2C
+//
+// ----------------------------------------------------------------------------
+
+void SercomI2C::reset()
+{
+  //I2CM OR I2CS, no matter SWRST is the same bit.
+
+  //Setting the Software bit to 1
+  sercom->I2CM.CTRLA.bit.SWRST = 1;
+
+  //Wait both bits Software Reset from CTRLA and SYNCBUSY are equal to 0
+  while (sercom->I2CM.CTRLA.bit.SWRST || sercom->I2CM.SYNCBUSY.bit.SWRST)
+    ;
+}
+
+void SercomI2C::enable()
+{
+  // I2C Master and Slave modes share the ENABLE bit function.
+
+  // Enable the I�C master mode
+  sercom->I2CM.CTRLA.bit.ENABLE = 1;
+
+  while (sercom->I2CM.SYNCBUSY.bit.ENABLE != 0)
+  {
+    // Waiting the enable bit from SYNCBUSY is equal to 0;
+  }
+
+  // Setting bus idle mode
+  sercom->I2CM.STATUS.bit.BUSSTATE = 1;
+
+  while (sercom->I2CM.SYNCBUSY.bit.SYSOP != 0)
+  {
+    // Wait the SYSOP bit from SYNCBUSY coming back to 0
+  }
+}
+
+void SercomI2C::disable()
+{
+  // I2C Master and Slave modes share the ENABLE bit function.
+
+  // Enable the I�C master mode
+  sercom->I2CM.CTRLA.bit.ENABLE = 0;
+
+  while (sercom->I2CM.SYNCBUSY.bit.ENABLE != 0)
+  {
+    // Waiting the enable bit from SYNCBUSY is equal to 0;
+  }
+}
+
+void SercomI2C::initSlave(uint8_t ucAddress)
+{
+  // Initialize the peripheral clock and interruption
+  initClockNVIC();
+  reset();
+
+  // Set slave mode
+  sercom->I2CS.CTRLA.bit.MODE = I2C_SLAVE_OPERATION;
+
+  sercom->I2CS.ADDR.reg = SERCOM_I2CS_ADDR_ADDR(ucAddress & 0x7Ful) | // 0x7F, select only 7 bits
+                          SERCOM_I2CS_ADDR_ADDRMASK(0x00ul);          // 0x00, only match exact address
+
+  // Set the interrupt register
+  sercom->I2CS.INTENSET.reg = SERCOM_I2CS_INTENSET_PREC |   // Stop
+                              SERCOM_I2CS_INTENSET_AMATCH | // Address Match
+                              SERCOM_I2CS_INTENSET_DRDY;    // Data Ready
+
+  while (sercom->I2CM.SYNCBUSY.bit.SYSOP != 0)
+  {
+    // Wait the SYSOP bit from SYNCBUSY to come back to 0
+  }
+}
+
+void SercomI2C::initMaster(uint32_t baudrate)
+{
+  // Initialize the peripheral clock and interruption
+  initClockNVIC();
+
+  reset();
+
+  // Set master mode and enable SCL Clock Stretch mode (stretch after ACK bit)
+  sercom->I2CM.CTRLA.reg = SERCOM_I2CM_CTRLA_MODE(I2C_MASTER_OPERATION) /* |
+                            SERCOM_I2CM_CTRLA_SCLSM*/;
+
+  // Enable Smart mode and Quick Command
+  //sercom->I2CM.CTRLB.reg =  SERCOM_I2CM_CTRLB_SMEN /*| SERCOM_I2CM_CTRLB_QCEN*/ ;
+
+  // Enable all interrupts
+  //  sercom->I2CM.INTENSET.reg = SERCOM_I2CM_INTENSET_MB | SERCOM_I2CM_INTENSET_SB | SERCOM_I2CM_INTENSET_ERROR ;
+
+  // Synchronous arithmetic baudrate
+  sercom->I2CM.BAUD.bit.BAUD = SystemCoreClock / (2 * baudrate) - 1;
+}
+
+
+// ----------------------------------------------------------------------------
+//
+// SERCOM SPI
+//
+// ----------------------------------------------------------------------------
+
+void SercomSPI::init(SercomSpiTXPad mosi, SercomRXPad miso, SercomSpiCharSize charSize, SercomDataOrder dataOrder)
+{
+  reset();
+  initClockNVIC();
+
+  //Setting the CTRLA register
+  sercom->SPI.CTRLA.reg = SERCOM_SPI_CTRLA_MODE_SPI_MASTER |
+                          SERCOM_SPI_CTRLA_DOPO(mosi) |
+                          SERCOM_SPI_CTRLA_DIPO(miso) |
+                          dataOrder << SERCOM_SPI_CTRLA_DORD_Pos;
+
+  //Setting the CTRLB register
+  sercom->SPI.CTRLB.reg = SERCOM_SPI_CTRLB_CHSIZE(charSize) |
+                          SERCOM_SPI_CTRLB_RXEN; //Active the SPI receiver.
+}
+
+void SercomSPI::initClock(SercomSpiClockMode clockMode, uint32_t baudrate)
+{
+  //Extract data from clockMode
+  int cpha, cpol;
+
+  if ((clockMode & (0x1ul)) == 0)
+    cpha = 0;
+  else
+    cpha = 1;
+
+  if ((clockMode & (0x2ul)) == 0)
+    cpol = 0;
+  else
+    cpol = 1;
+
+  //Setting the CTRLA register
+  sercom->SPI.CTRLA.reg |= (cpha << SERCOM_SPI_CTRLA_CPHA_Pos) |
+                           (cpol << SERCOM_SPI_CTRLA_CPOL_Pos);
+
+  //Synchronous arithmetic
+  sercom->SPI.BAUD.reg = calculateBaudrateSynchronous(baudrate);
+}
+
+void SercomSPI::setDataOrder(SercomDataOrder dataOrder)
+{
+  disableSPI();
+  sercom->SPI.CTRLA.bit.DORD = dataOrder;
+  enableSPI();
+}
+
+void SercomSPI::setBaudrate(uint8_t divider)
+{
+  if (divider == 0)
+    return;
+
+  disableSPI();
+  sercom->SPI.BAUD.reg = calculateBaudrateSynchronous(SERCOM_FREQ_REF / divider);
+  enableSPI();
+}
+
+void SercomSPI::setClockMode(SercomSpiClockMode clockMode)
+{
+  int cpha, cpol;
+  if ((clockMode & (0x1ul)) == 0)
+    cpha = 0;
+  else
+    cpha = 1;
+
+  if ((clockMode & (0x2ul)) == 0)
+    cpol = 0;
+  else
+    cpol = 1;
+
+  disableSPI();
+  sercom->SPI.CTRLA.bit.CPOL = cpol;
+  sercom->SPI.CTRLA.bit.CPHA = cpha;
+  enableSPI();
+}

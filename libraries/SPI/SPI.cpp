@@ -32,7 +32,7 @@ SPIClass::SPIClass(SERCOM *p_sercom, uint8_t uc_pinMISO, uint8_t uc_pinSCK, uint
 {
   initialized = false;
   assert(p_sercom != NULL);
-  _p_sercom = p_sercom;
+  _p_sercom = (SercomSPI*) p_sercom;
 
   // pins
   _uc_pinMiso = uc_pinMISO;
@@ -68,17 +68,17 @@ void SPIClass::init()
 
 void SPIClass::config(SPISettings settings)
 {
-  _p_sercom->disableSPI();
+  _p_sercom->disable();
 
-  _p_sercom->initSPI(_padTx, _padRx, SPI_CHAR_SIZE_8_BITS, settings.bitOrder);
-  _p_sercom->initSPIClock(settings.dataMode, settings.clockFreq);
+  _p_sercom->init(_padTx, _padRx, SPI_CHAR_SIZE_8_BITS, settings.bitOrder);
+  _p_sercom->initClock(settings.dataMode, settings.clockFreq);
 
-  _p_sercom->enableSPI();
+  _p_sercom->enable();
 }
 
 void SPIClass::end()
 {
-  _p_sercom->resetSPI();
+  _p_sercom->reset();
   initialized = false;
 }
 
@@ -165,9 +165,9 @@ void SPIClass::endTransaction(void)
 void SPIClass::setBitOrder(BitOrder order)
 {
   if (order == LSBFIRST) {
-    _p_sercom->setDataOrderSPI(LSB_FIRST);
+    _p_sercom->setDataOrder(LSB_FIRST);
   } else {
-    _p_sercom->setDataOrderSPI(MSB_FIRST);
+    _p_sercom->setDataOrder(MSB_FIRST);
   }
 }
 
@@ -176,19 +176,19 @@ void SPIClass::setDataMode(uint8_t mode)
   switch (mode)
   {
     case SPI_MODE0:
-      _p_sercom->setClockModeSPI(SERCOM_SPI_MODE_0);
+      _p_sercom->setClockMode(SERCOM_SPI_MODE_0);
       break;
 
     case SPI_MODE1:
-      _p_sercom->setClockModeSPI(SERCOM_SPI_MODE_1);
+      _p_sercom->setClockMode(SERCOM_SPI_MODE_1);
       break;
 
     case SPI_MODE2:
-      _p_sercom->setClockModeSPI(SERCOM_SPI_MODE_2);
+      _p_sercom->setClockMode(SERCOM_SPI_MODE_2);
       break;
 
     case SPI_MODE3:
-      _p_sercom->setClockModeSPI(SERCOM_SPI_MODE_3);
+      _p_sercom->setClockMode(SERCOM_SPI_MODE_3);
       break;
 
     default:
@@ -199,15 +199,15 @@ void SPIClass::setDataMode(uint8_t mode)
 void SPIClass::setClockDivider(uint8_t div)
 {
   if (div < SPI_MIN_CLOCK_DIVIDER) {
-    _p_sercom->setBaudrateSPI(SPI_MIN_CLOCK_DIVIDER);
+    _p_sercom->setBaudrate(SPI_MIN_CLOCK_DIVIDER);
   } else {
-    _p_sercom->setBaudrateSPI(div);
+    _p_sercom->setBaudrate(div);
   }
 }
 
 byte SPIClass::transfer(uint8_t data)
 {
-  return _p_sercom->transferDataSPI(data);
+  return _p_sercom->transfer(data);
 }
 
 uint16_t SPIClass::transfer16(uint16_t data) {
@@ -215,7 +215,7 @@ uint16_t SPIClass::transfer16(uint16_t data) {
 
   t.val = data;
 
-  if (_p_sercom->getDataOrderSPI() == LSB_FIRST) {
+  if (_p_sercom->getDataOrder() == LSB_FIRST) {
     t.lsb = transfer(t.lsb);
     t.msb = transfer(t.msb);
   } else {
@@ -232,6 +232,20 @@ void SPIClass::transfer(void *buf, size_t count)
   for (size_t i=0; i<count; i++) {
     *buffer = transfer(*buffer);
     buffer++;
+  }
+}
+
+void SPIClass::transceive(const uint8_t *tx, uint8_t *rx, size_t count)
+{
+  if (rx && tx ) {
+    for (size_t i=0; i<count; ++i)
+      rx[i] = _p_sercom->transfer(tx[i]);
+  } else if (tx) {
+    for (size_t i=0; i<count; ++i)
+       _p_sercom->transfer(tx[i]);    
+  } else if (rx) {
+    for (size_t i=0; i<count; ++i)
+      rx[i] = _p_sercom->transfer(0); 
   }
 }
 

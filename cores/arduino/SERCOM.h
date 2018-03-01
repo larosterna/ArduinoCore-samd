@@ -210,11 +210,207 @@ class SERCOM
 		int availableWIRE( void ) ;
 		uint8_t readDataWIRE( void ) ;
 
-	private:
+	protected:
 		Sercom* sercom;
 		uint8_t calculateBaudrateSynchronous(uint32_t baudrate) ;
 		uint32_t division(uint32_t dividend, uint32_t divisor) ;
 		void initClockNVIC( void ) ;
 };
+
+
+class SercomI2C : public SERCOM  
+{
+public:
+
+	void initSlave(uint8_t address) ;
+	void initMaster(uint32_t baudrate) ;
+
+	void reset( void ) ;
+	void enable( void ) ;
+	void disable( void );
+
+	inline void prepareNackBit( void ) __attribute__ ((always_inline)) {
+		if (isMaster())
+			sercom->I2CM.CTRLB.bit.ACKACT = 1;
+		else
+			sercom->I2CS.CTRLB.bit.ACKACT = 1;
+		}
+	
+	inline void prepareAckBit( void ) __attribute__ ((always_inline)) {
+		if ( isMaster() ) {
+			sercom->I2CM.CTRLB.bit.ACKACT = 0;
+		} else {
+			sercom->I2CS.CTRLB.bit.ACKACT = 0;
+		}
+	}	 
+
+	inline void prepareCommandBits(uint8_t cmd) __attribute__ ((always_inline)) {
+		if (isMaster()) {
+			sercom->I2CM.CTRLB.bit.CMD = cmd;
+			while(sercom->I2CM.SYNCBUSY.bit.SYSOP) {} // Waiting for synchronization
+		} else {
+			sercom->I2CS.CTRLB.bit.CMD = cmd;
+		}
+	}
+
+	inline bool startTransmission(uint8_t address, SercomWireReadWriteFlag flag) __attribute__ ((always_inline)) {
+		address = (address << 0x1ul) | flag; // 7-bits address + 1-bits R/W
+		while ( !isBusIdle() && !isBusOwner() ); // Wait idle or owner bus mode
+		sercom->I2CM.ADDR.bit.ADDR = address; // Send start and address
+
+		// Address Transmitted
+		if ( flag == WIRE_WRITE_FLAG ) { // Write mode 
+			while( !(sercom->I2CM.INTFLAG.bit.MB) ) {} // Wait transmission complete
+		} else  { // Read mode 
+			while( !(sercom->I2CM.INTFLAG.bit.SB) ) {
+				// If the slave NACKS the address, the MB bit will be set.
+				// In that case, send a stop condition and return false.
+				if (sercom->I2CM.INTFLAG.bit.MB) {
+					sercom->I2CM.CTRLB.bit.CMD = 3; // Stop condition
+					return false;
+				}
+				// Wait transmission complete
+			}
+		}
+		// ACK received (0: ACK, 1: NACK)
+		return !(sercom->I2CM.STATUS.bit.RXNACK);
+	}
+
+	inline bool sendDataMaster(uint8_t data) __attribute__ ((always_inline, hot)) {
+		sercom->I2CM.DATA.bit.DATA = data;
+		while ( !sercom->I2CM.INTFLAG.bit.MB ) {
+			// If a bus error occurs, the MB bit may never be set.
+			// Check the bus error bit and bail if it's set.
+			if (sercom->I2CM.STATUS.bit.BUSERR) 
+				return false;
+		}
+
+		//Problems on line? nack received?
+		return !(sercom->I2CM.STATUS.bit.RXNACK);
+	}
+
+	inline bool sendDataSlave(uint8_t data) __attribute__ ((always_inline)) {
+		sercom->I2CS.DATA.bit.DATA = data;
+		return  !(!sercom->I2CS.INTFLAG.bit.DRDY || sercom->I2CS.STATUS.bit.RXNACK);
+	}
+
+	inline bool isMaster( void ) const __attribute__ ((always_inline, hot)) {
+		return (sercom->I2CS.CTRLA.bit.MODE == I2C_MASTER_OPERATION);
+	}
+
+	inline bool isSlave( void ) __attribute__ ((always_inline)) {
+  		return sercom->I2CS.CTRLA.bit.MODE == I2C_SLAVE_OPERATION;
+	}
+
+	inline bool isBusIdle( void ) const __attribute__ ((always_inline, hot)) {
+		return (sercom->I2CM.STATUS.bit.BUSSTATE == WIRE_IDLE_STATE);
+	}
+
+	inline bool isBusOwner( void ) const __attribute__ ((always_inline, hot)) {
+		return (sercom->I2CM.STATUS.bit.BUSSTATE == WIRE_OWNER_STATE);
+	}
+
+	inline bool isDataReady( void ) __attribute__ ((always_inline)) {
+ 		return sercom->I2CS.INTFLAG.bit.DRDY;
+	}
+
+	inline bool isStopDetected( void ) __attribute__ ((always_inline)) {
+  		return sercom->I2CS.INTFLAG.bit.PREC;
+	}
+
+	inline bool isRestartDetected( void ) __attribute__ ((always_inline)) {
+  		return sercom->I2CS.STATUS.bit.SR;
+	}
+
+	inline bool isAddressMatch( void ) __attribute__ ((always_inline)) {
+  		return sercom->I2CS.INTFLAG.bit.AMATCH;
+	}
+
+	inline bool isMasterReadOperation( void ) __attribute__ ((always_inline)) {
+  		return sercom->I2CS.STATUS.bit.DIR;
+	}
+
+	inline bool isRXNackReceived( void ) __attribute__ ((always_inline))  {
+  		return sercom->I2CM.STATUS.bit.RXNACK;
+	}
+
+	inline int available( void ) __attribute__ ((always_inline, hot)) {
+		if (isMaster())
+			return sercom->I2CM.INTFLAG.bit.SB;
+		else
+			return sercom->I2CS.INTFLAG.bit.DRDY;
+	}
+
+	inline uint8_t readData( void ) __attribute__ ((always_inline, hot)) 
+	{
+		if ( isMasterWIRE() ) {
+			while( sercom->I2CM.INTFLAG.bit.SB == 0 ) {} // Waiting complete receive
+			return sercom->I2CM.DATA.bit.DATA ;
+		} else {
+			return sercom->I2CS.DATA.reg ;
+		}
+	}
+
+	// no member data: layout compatibility with SERCOM
+};
+
+class SercomSPI : public SERCOM
+{
+public:
+
+	void init(SercomSpiTXPad mosi, SercomRXPad miso, SercomSpiCharSize charSize, SercomDataOrder dataOrder) ;
+	void initClock(SercomSpiClockMode clockMode, uint32_t baudrate) ;
+
+	inline void reset( void ) {
+		sercom->SPI.CTRLA.bit.SWRST = 1;
+		while (sercom->SPI.CTRLA.bit.SWRST || sercom->SPI.SYNCBUSY.bit.SWRST);
+	}
+
+	inline void enable( void ) __attribute__ ((always_inline)) {
+		sercom->SPI.CTRLA.bit.ENABLE = 1;
+		while (sercom->SPI.SYNCBUSY.bit.ENABLE);
+	}
+
+	inline void disable( void ) __attribute__ ((always_inline)) {
+		while (sercom->SPI.SYNCBUSY.bit.ENABLE);
+		sercom->SPI.CTRLA.bit.ENABLE = 0;
+	}
+	
+	void setDataOrder(SercomDataOrder dataOrder) ;
+	
+	inline SercomDataOrder getDataOrder( void ) {
+  		return (sercom->SPI.CTRLA.bit.DORD ? LSB_FIRST : MSB_FIRST);
+	}
+
+	void setBaudrate(uint8_t divider) ;
+	void setClockMode(SercomSpiClockMode clockMode) ;
+	
+	inline uint8_t transfer(uint8_t data) __attribute__((always_inline, hot)) {
+		sercom->SPI.DATA.bit.DATA = data; 
+		while( sercom->SPI.INTFLAG.bit.RXC == 0 ) {}
+		return sercom->SPI.DATA.bit.DATA;  
+	}
+
+	inline void send(uint8_t data) __attribute__((always_inline, hot)) {
+		sercom->SPI.DATA.bit.DATA = data; 
+		while( sercom->SPI.INTFLAG.bit.TXC == 0 ) {} 
+	}
+
+	inline uint8_t recv() __attribute__((always_inline, hot)) {
+		while( sercom->SPI.INTFLAG.bit.RXC == 0 ) {}
+		return sercom->SPI.DATA.bit.DATA; 
+	}
+
+	inline bool isBufferOverflowError( void ) __attribute__((always_inline))  {
+  		return sercom->SPI.STATUS.bit.BUFOVF;
+	}
+
+	inline bool isDataRegisterEmpty( void ) __attribute__((always_inline)) {
+  		return sercom->SPI.INTFLAG.bit.DRE;
+	}
+
+	// no member data: layout compatibility with SERCOM
+};
+
 
 #endif

@@ -48,8 +48,17 @@ class TwoWire : public Stream
     size_t write(uint8_t data);
     size_t write(const uint8_t * data, size_t quantity);
 
-    virtual int available(void);
-    virtual int read(void);
+    virtual inline int available(void) __attribute__((always_inline)) {
+      return rxBuffer.available();
+    }
+
+    virtual inline int read(void) __attribute__((always_inline)) {
+      return rxBuffer.read_char();
+    }
+
+    size_t readBytesFrom(uint8_t address, uint8_t subAddress, 
+                         size_t quantity, uint8_t *dest, bool stopBit=true); 
+
     virtual int peek(void);
     virtual void flush(void);
     void onReceive(void(*)(int));
@@ -64,7 +73,8 @@ class TwoWire : public Stream
     void onService(void);
 
   private:
-    SERCOM * sercom;
+
+    SercomI2C * sercom;
     uint8_t _uc_pinSDA;
     uint8_t _uc_pinSCL;
 

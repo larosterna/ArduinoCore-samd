@@ -28,7 +28,7 @@ extern "C" {
 
 TwoWire::TwoWire(SERCOM * s, uint8_t pinSDA, uint8_t pinSCL)
 {
-  this->sercom = s;
+  this->sercom = (SercomI2C *) s;
   this->_uc_pinSDA=pinSDA;
   this->_uc_pinSCL=pinSCL;
   transmissionBegun = false;
@@ -97,6 +97,39 @@ uint8_t TwoWire::requestFrom(uint8_t address, size_t quantity, bool stopBit)
   return byteRead;
 }
 
+size_t TwoWire::readBytesFrom(uint8_t address, uint8_t subAddress, size_t quantity, uint8_t *dest, bool stopBit) 
+{
+  // Start I2C transmission
+  if ( !sercom->startTransmission( address, WIRE_WRITE_FLAG ) ) {
+    sercom->prepareCommandBits(WIRE_MASTER_ACT_STOP);
+    return 0 ;  // Address error
+  }
+
+  // Send subaddress
+  if ( !sercom->sendDataMaster(subAddress) ) {
+    sercom->prepareCommandBits(WIRE_MASTER_ACT_STOP);
+    return 0 ; 
+  }
+
+  size_t byteRead = 0;
+  if (sercom->startTransmission(address, WIRE_READ_FLAG)) {
+    dest[0] = sercom->readData();
+    for (byteRead = 1; byteRead < quantity; ++byteRead) {
+      sercom->prepareAckBit();                          // Prepare Acknowledge
+      sercom->prepareCommandBits(WIRE_MASTER_ACT_READ); // Prepare the ACK command for the slave
+      dest[byteRead] = sercom->readData();                     // Read data and send the ACK
+    }
+    sercom->prepareNackBit();                           // Prepare NACK to stop slave transmission
+  } else {
+    return 0;
+  }
+
+  if (stopBit)
+    sercom->prepareCommandBits(WIRE_MASTER_ACT_STOP);
+
+  return byteRead;
+}
+
 uint8_t TwoWire::requestFrom(uint8_t address, size_t quantity)
 {
   return requestFrom(address, quantity, true);
@@ -121,9 +154,9 @@ uint8_t TwoWire::endTransmission(bool stopBit)
   transmissionBegun = false ;
 
   // Start I2C transmission
-  if ( !sercom->startTransmissionWIRE( txAddress, WIRE_WRITE_FLAG ) )
+  if ( !sercom->startTransmission( txAddress, WIRE_WRITE_FLAG ) )
   {
-    sercom->prepareCommandBitsWire(WIRE_MASTER_ACT_STOP);
+    sercom->prepareCommandBits(WIRE_MASTER_ACT_STOP);
     return 2 ;  // Address error
   }
 
@@ -131,16 +164,16 @@ uint8_t TwoWire::endTransmission(bool stopBit)
   while( txBuffer.available() )
   {
     // Trying to send data
-    if ( !sercom->sendDataMasterWIRE( txBuffer.read_char() ) )
+    if ( !sercom->sendDataMaster( txBuffer.read_char() ) )
     {
-      sercom->prepareCommandBitsWire(WIRE_MASTER_ACT_STOP);
+      sercom->prepareCommandBits(WIRE_MASTER_ACT_STOP);
       return 3 ;  // Nack or error
     }
   }
   
   if (stopBit)
   {
-    sercom->prepareCommandBitsWire(WIRE_MASTER_ACT_STOP);
+    sercom->prepareCommandBits(WIRE_MASTER_ACT_STOP);
   }   
 
   return 0;
@@ -176,16 +209,6 @@ size_t TwoWire::write(const uint8_t *data, size_t quantity)
 
   //All data stored
   return quantity;
-}
-
-int TwoWire::available(void)
-{
-  return rxBuffer.available();
-}
-
-int TwoWire::read(void)
-{
-  return rxBuffer.read_char();
 }
 
 int TwoWire::peek(void)
